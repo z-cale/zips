@@ -137,10 +137,10 @@ this section for vote share encryption.
 Let $G$ be the Pallas generator defined as
 $\mathcal{G}^{\mathsf{Orchard}}$ in the Zcash protocol
 specification [^protocol-orchardkeycomponents] (the Orchard spend
-authorization base point). The scalar field is
-$\mathbb{F}_{q_{\mathbb{P}}}$. The EA keypair is:
+authorization base point). Let $\mathbb{F}_q$ denote the scalar field of
+the Pallas curve. The EA keypair is:
 
-- $\mathsf{ea\_sk} \in \mathbb{F}_{q_{\mathbb{P}}}$: a random scalar.
+- $\mathsf{ea\_sk} \in \mathbb{F}_q$: a random scalar.
 - $\mathsf{ea\_pk} = \mathsf{ea\_sk} \cdot G$: the corresponding public
   key.
 
@@ -152,10 +152,10 @@ and compatibility with the voting circuit.
 
 To encrypt a value $v$ (expressed in ballots, i.e., zatoshi
 floor-divided by 12,500,000) with randomness
-$r \leftarrow \mathbb{F}_{q_{\mathbb{P}}}$:
+$r \leftarrow \mathbb{F}_q$:
 
 $$
-\mathsf{Enc}(v, r) = (r \cdot G, \; v \cdot G + r \cdot \mathsf{ea\_pk})
+\mathsf{Enc}(v, r) = (r \cdot G, \enspace v \cdot G + r \cdot \mathsf{ea\_pk})
 $$
 
 The ciphertext is a pair of Pallas points $(C_1, C_2)$.
@@ -166,7 +166,7 @@ Given ciphertexts $\mathsf{Enc}(a, r_1)$ and $\mathsf{Enc}(b, r_2)$,
 component-wise point addition yields a valid encryption of the sum:
 
 $$
-\mathsf{Enc}(a, r_1) + \mathsf{Enc}(b, r_2) = \mathsf{Enc}(a + b, \; r_1 + r_2)
+\mathsf{Enc}(a, r_1) + \mathsf{Enc}(b, r_2) = \mathsf{Enc}(a + b, \enspace r_1 + r_2)
 $$
 
 This allows anyone to publicly aggregate encrypted vote shares without
@@ -205,7 +205,7 @@ $D = C_{2,\text{agg}} - \mathsf{total\_value} \cdot G$.
 
 The proof protocol is:
 
-1. Prover samples $k \leftarrow \mathbb{F}_{q_{\mathbb{P}}}$ and computes
+1. Prover samples $k \leftarrow \mathbb{F}_q$ and computes
    $R_1 = k \cdot G$ and $R_2 = k \cdot C_{1,\text{agg}}$.
 2. Fiat-Shamir challenge:
    $c = \mathsf{H2S}(\mathsf{BLAKE2b\text{-}256}(\texttt{"zally-dleq-v1"} \| \mathsf{compress}(G) \| \mathsf{compress}(\mathsf{ea\_pk}) \| \mathsf{compress}(C_{1,\text{agg}}) \| \mathsf{compress}(D) \| \mathsf{compress}(R_1) \| \mathsf{compress}(R_2)))$
@@ -239,7 +239,7 @@ $\mathsf{pk}_i = \mathsf{sk}_i \cdot G$, and plaintext $m$
 
 **Encryption** (by the dealer):
 
-1. Generate ephemeral scalar $e_i \leftarrow \mathbb{F}_{q_{\mathbb{P}}}$
+1. Generate ephemeral scalar $e_i \leftarrow \mathbb{F}_q$
    and compute ephemeral public key $E_i = e_i \cdot G$.
 2. Compute ECDH shared secret $S_i = e_i \cdot \mathsf{pk}_i$.
 3. Derive symmetric key
@@ -300,13 +300,13 @@ $t = \lceil n/2 \rceil$ (minimum 2) be the threshold.
 
 The dealer:
 
-1. Generates $\mathsf{ea\_sk} \leftarrow \mathbb{F}_{q_{\mathbb{P}}}$ and
+1. Generates $\mathsf{ea\_sk} \leftarrow \mathbb{F}_q$ and
    computes $\mathsf{ea\_pk} = \mathsf{ea\_sk} \cdot G$.
 2. Constructs a random polynomial
    $f(x) = \mathsf{ea\_sk} + a_1 x + \cdots + a_{t-1} x^{t-1}$
    of degree $t - 1$ with $f(0) = \mathsf{ea\_sk}$ and random
    coefficients
-   $a_1, \ldots, a_{t-1} \leftarrow \mathbb{F}_{q_{\mathbb{P}}}$.
+   $a_1, \ldots, a_{t-1} \leftarrow \mathbb{F}_q$.
 3. Evaluates $f(i)$ for $i = 1, \ldots, n$ to produce $n$ Shamir
    shares [^shamir].
 4. Computes verification keys $\mathsf{VK}_i = f(i) \cdot G$ for each
