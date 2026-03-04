@@ -10,6 +10,7 @@
     License: MIT
     Pull-Request: <https://github.com/zcash/zips/pull/???>
 
+
 # Terminology
 
 The key words "MUST", "REQUIRED", "MUST NOT", "SHOULD", and "MAY" in this
@@ -20,14 +21,14 @@ The terms below are to be interpreted as follows:
 
 Vote chain
 : A purpose-built Cosmos SDK blockchain that serves as the single source
-of truth for all voting operations. The vote chain stores vote
-commitments, nullifier sets, and encrypted share accumulators, and
-verifies zero-knowledge proofs for each transaction type.
+  of truth for all voting operations. The vote chain stores vote
+  commitments, nullifier sets, and encrypted share accumulators, and
+  verifies zero-knowledge proofs for each transaction type.
 
 Voting round
 : A complete instance of a coinholder vote, from round creation through
-tally. Each round is scoped to a single Zcash mainnet snapshot and a
-fresh Election Authority key.
+  tally. Each round is scoped to a single Zcash mainnet snapshot and a
+  fresh Election Authority key.
 
 Vote round ID
 : A unique identifier for a voting round, derived from the round's
@@ -36,154 +37,95 @@ Vote round ID
 
 Poll runner
 : The entity responsible for conducting a voting round: selecting the
-snapshot height, coordinating validators, publishing the round, and
-overseeing the tally.
+  snapshot height, coordinating validators, publishing the round, and
+  overseeing the tally.
 
 Vote manager
 : The on-chain role that creates voting rounds. Only the vote manager
-can publish new rounds via `MsgCreateVotingSession`.
+  can publish new rounds via `MsgCreateVotingSession`.
 
 Bootstrap operator
 : The entity that generates the vote chain genesis, funds validators
-from the token reserve, and controls initial consensus power
-distribution.
+  from the token reserve, and controls initial consensus power
+  distribution.
 
 Validator
 : A vote chain consensus participant that runs the chain, participates
-in the EA key ceremony, and contributes to the automatic tally. Each
-validator maintains three keypairs: consensus, account, and Pallas.
-
-Voter
-: Any holder of one or more Orchard notes at the snapshot height. Voters
-interact with the system via a wallet application.
-
-Vote Authority Note (VAN)
-: A note created on the vote chain during delegation (Phase 1) that
-represents a voter's delegated voting weight. A VAN is consumed during
-voting (Phase 2) and a new VAN is produced with the relevant proposal
-bit cleared.
-
-Vote Commitment (VC)
-: A commitment created during Phase 2 that binds the voter's choice and
-encrypted shares for a given proposal. Vote commitments are stored in
-the Vote Commitment Tree.
-
-Vote Commitment Tree (VCT)
-: A Poseidon Merkle tree on the vote chain that stores all vote
-commitments for a given round.
-
-Election Authority (EA)
-: A logical role whose secret key $\mathsf{ea\_sk}$ is used for El Gamal
-  encryption [^elgamal] of vote shares. In the current design, all ACK'd
-  validators hold $\mathsf{ea\_sk}$ for the round.
-
-EA key ceremony
-: A per-round protocol that produces a fresh El Gamal keypair
-$(\mathsf{ea\_sk}, \mathsf{ea\_pk})$ distributed to eligible validators.
-See [EA Key Ceremony].
+  in the EA key ceremony, and contributes to the automatic tally. Each
+  validator maintains three keypairs: consensus, account, and Pallas.
 
 Snapshot height
 : The Zcash mainnet block height at which eligible Orchard note balances
   are captured. See [Snapshot Configuration] for constraints.
 
-Helper server
-: A service embedded in validator nodes that receives encrypted vote
-shares from wallet clients, buffers them, and submits them to the vote
-chain with randomized delays to provide temporal unlinkability.
+For definitions of cryptographic terms including *alternate nullifier*,
+*nullifier non-membership tree*, *nullifier domain*, *pool snapshot*, and
+*claim*, see the Orchard Proof-of-Balance ZIP [^draft-balance-proof]. For
+EA key ceremony terms, see [^draft-ceremony]. For PIR-related terms, see
+[^draft-pir].
 
-For definitions of cryptographic terms including _alternate nullifier_,
-_nullifier non-membership tree_, _nullifier domain_, _pool snapshot_, and
-_claim_, see the Orchard Proof-of-Balance ZIP [^draft-balance-proof]. For
-PIR-related terms, see the PIR for Nullifier Exclusion Proofs ZIP [^draft-pir].
 
 # Abstract
 
-This ZIP specifies the end-to-end process for conducting a
-privacy-preserving Zcash coinholder vote. It covers the vote chain
-infrastructure, poll setup, the voting process from delegation through
-tally, and result verification. The system uses a purpose-built Cosmos SDK
-chain as the single source of truth, with Zcash mainnet snapshots providing
-eligible balances. Votes are cast using zero-knowledge proofs and El Gamal
-encryption so that voter identity, individual vote amounts, and total
-holdings remain hidden, while anyone can verify the tally via DLEQ
-proofs [^cp92].
+This ZIP specifies the node operator and poll runner concerns for
+conducting a Zcash shielded coinholder vote: vote chain infrastructure
+setup, validator onboarding, voting round configuration, and tally
+verification. For the EA key ceremony protocol, see [^draft-ceremony].
+For the voter-facing voting protocol (delegation, vote casting, share
+reveal), see [^draft-voting-protocol].
+
 
 # Motivation
 
 ZIP 1016 [^zip-1016] establishes a Coinholder-Controlled Fund funded by 12%
 of block rewards, requiring coinholder votes to approve grant proposals.
-Conducting such votes requires a concrete process specification that a new
-poll runner can follow end-to-end without needing to understand the
-underlying cryptographic circuits.
+Conducting such votes requires infrastructure operated by node operators
+and poll runners. This ZIP specifies the operational concerns for that
+infrastructure — what to build, how to configure it, and how to run a
+voting round — separately from the cryptographic protocols and voter-facing
+interactions specified in companion ZIPs.
 
-This ZIP separates operational concerns — infrastructure setup, role
-assignment, round lifecycle, timing — from the cryptographic protocol
-details specified in the companion ZIPs. A poll runner reads this document
-and knows what to do; a circuit implementer reads the companion ZIPs and
-knows what to prove.
 
 # Privacy Implications
 
-The voting system is designed so that no single party learns any
-individual voter's identity, vote choice, or balance. However, the
-following trust assumptions and residual risks apply at the deployment
-level:
-
-- **EA key compromise**: all validators that ACK a round's ceremony hold
-  the round's Election Authority secret key. If any one of them is
-  compromised, an adversary can decrypt individual encrypted vote shares
-  for that round, breaking vote-amount privacy. Voter identity remains
-  protected because alternate nullifiers are unlinkable to on-chain
-  spending activity.
-- **Helper server metadata**: helper servers observe encrypted shares and
-  the voter's decision index (which proposal option was chosen). They do
-  not learn plaintext amounts or voter identity. An adversary controlling
-  a helper server could correlate the timing of wallet submissions with
-  on-chain share reveals to narrow the anonymity set.
-- **PIR server access pattern**: communication with the PIR server reveals
-  that the client is participating in the voting process, though the PIR
-  protocol hides which specific nullifier is being queried.
-- **Per-round isolation**: each round uses a fresh EA key. Compromise of
-  one round's key does not affect privacy of past or future rounds.
+- Communication with the PIR server reveals that a client is participating
+  in the voting process, though the PIR protocol hides which specific
+  nullifier is being queried.
+- The vote chain is a public ledger. All transactions (delegation, vote,
+  share reveal) are visible, but their contents are encrypted or
+  zero-knowledge proven. Node operators see encrypted data, not plaintext.
+- Validator power distribution affects the trust model for the EA key
+  ceremony. See [^draft-ceremony] for EA-specific privacy implications.
 
 
 # Requirements
 
-- A new poll runner can conduct a vote by following this specification and
-  the referenced companion ZIPs.
-- **Privacy**: voter identity, individual vote amounts, and total holdings
-  remain hidden from all parties including validators.
-- **Verifiability**: anyone can audit the tally by verifying the DLEQ
-  proofs without trusting the Election Authority or validators.
-- **Liveness**: voting proceeds with partial validator availability (at
-  least one-third of validators ACK the ceremony).
-- **Accessibility**: voters can participate in a single online session —
-  come online once, delegate and vote, then go offline.
-- **Minimum voting weight**: one ballot corresponds to 12,500,000 zatoshi
-  (0.125 ZEC). Notes below this threshold are not eligible.
+- A new poll runner can set up infrastructure and conduct a voting round
+  by following this specification and the referenced companion ZIPs.
+- The vote chain operates as a public, verifiable ledger — anyone can run
+  a monitoring node to audit.
+- The system operates with partial validator availability.
+
 
 # Non-requirements
 
-The following are explicitly out of scope for this ZIP:
-
 - Governance policy decisions such as proposal eligibility, quorum
   requirements, and fund disbursement rules (see ZIP 1016 [^zip-1016]).
-- The cryptographic proof-of-balance protocol: note ownership proofs,
-  alternate nullifier derivation, and nullifier non-membership tree
-  construction (see [^draft-balance-proof]).
-- Vote proof and reveal proof circuits, delegation protocol, share
-  splitting, and El Gamal encryption scheme (see [^draft-voting-protocol]).
-- PIR protocol details: YPIR+SP construction, three-tier data structure,
-  and query mechanics (see [^draft-pir]).
+- The cryptographic proof-of-balance protocol (see [^draft-balance-proof]).
+- Voter-facing protocol: delegation, vote casting, share splitting, and
+  share reveal circuits (see [^draft-voting-protocol]).
+- EA key ceremony protocol and tally decryption (see [^draft-ceremony]).
+- PIR protocol details (see [^draft-pir]).
 - On-chain accountable voting (see [^draft-onchain-voting]).
+
 
 # Specification
 
 ## System Overview
 
 The coinholder voting system operates on a purpose-built Cosmos SDK vote
-chain that serves as the single source of truth for all voting operations.
-Zcash mainnet snapshots provide the set of eligible Orchard note balances.
+chain. Zcash mainnet snapshots provide the set of eligible Orchard note
+balances.
 
 The vote chain stores:
 
@@ -196,25 +138,18 @@ The vote chain stores:
   homomorphic sum of El Gamal ciphertexts for each vote option.
 
 The vote chain verifies a zero-knowledge proof for each transaction type:
-delegation, vote, and share reveal. The proof circuits are specified in the
-Voting Protocol ZIP [^draft-voting-protocol].
+delegation, vote, and share reveal. The proof circuits are specified in
+[^draft-voting-protocol].
 
-Voting proceeds in five phases, detailed in [Voting Window]:
-
-1. **Delegation** — prove note ownership, delegate to hotkey.
-2. **Voting** — cast encrypted vote using hotkey.
-3. _(reserved)_
-4. **Share submission** — wallet sends encrypted shares to helper servers.
-5. **Share reveal** — helper servers submit shares to chain with proof.
-
-## Roles and Authorities
+## Roles
 
 ### Bootstrap Operator
 
 The bootstrap operator generates the vote chain genesis block, funds
 validators from the token reserve, and controls initial consensus power
 distribution. Funding amount determines each validator's consensus voting
-power.
+power. An even distribution across validators reduces the risk of consensus
+capture.
 
 ### Vote Manager
 
@@ -231,8 +166,9 @@ Assignment rules:
 
 ### Validator
 
-Validators participate in consensus, the EA key ceremony, and automatic
-tally computation. Each validator maintains three keypairs:
+Validators participate in consensus, the EA key ceremony
+(see [^draft-ceremony]), and automatic tally computation. Each validator
+maintains three keypairs:
 
 - **Consensus keypair**: used for CometBFT consensus.
 - **Account keypair**: used for submitting chain transactions.
@@ -241,33 +177,17 @@ tally computation. Each validator maintains three keypairs:
 Validators join the network via the automated `join.sh` script or by
 building from source. See [Onboarding Validators].
 
-### Voter
+### Role Summary
 
-Any holder of Orchard notes at the snapshot height. Voters interact with
-the voting system through a wallet application. The wallet handles proof
-generation, delegation, and share submission.
-
-### Helper Server
-
-Helper servers are embedded in validator nodes. They receive encrypted vote
-shares from wallet clients and submit them to the vote chain with
-randomized delays, providing temporal unlinkability between wallet
-submissions and on-chain transactions.
-
-### Authority Summary
-
-| Action                     | Bootstrap Op. | Vote Manager | Validator | Voter |
-| -------------------------- | :-----------: | :----------: | :-------: | :---: |
-| Generate genesis           |       X       |              |           |       |
-| Fund validators            |       X       |              |           |       |
-| Create voting round        |               |      X       |           |       |
-| Participate in consensus   |               |              |     X     |       |
-| EA key ceremony            |               |              |     X     |       |
-| Compute tally              |               |              |     X     |       |
-| Delegate voting weight     |               |              |           |   X   |
-| Cast vote                  |               |              |           |   X   |
-| Submit shares (via helper) |               |              |     X     |       |
-| Verify tally               |       X       |      X       |     X     |   X   |
+| Action                   | Bootstrap Op. | Vote Manager | Validator |
+| ------------------------ | :-----------: | :----------: | :-------: |
+| Generate genesis         |       X       |              |           |
+| Fund validators          |       X       |              |           |
+| Create voting round      |               |      X       |           |
+| Participate in consensus |               |              |     X     |
+| EA key ceremony          |               |              |     X     |
+| Compute tally            |               |              |     X     |
+| Verify tally             |       X       |      X       |     X     |
 
 ## Vote Chain Infrastructure
 
@@ -392,135 +312,26 @@ $$
 
 where Blake2b [^blake2] is used with a 256-bit output.
 
-The round enters the **PENDING** state, awaiting the EA key ceremony.
+The round enters the **PENDING** state. The EA key ceremony
+(see [^draft-ceremony]) runs automatically. On successful completion, the
+round transitions to **ACTIVE** and the voting window opens.
 
-### EA Key Ceremony
+### Round Lifecycle
 
-Each voting round requires a fresh El Gamal keypair
-$(\mathsf{ea\_sk}, \mathsf{ea\_pk})$ produced by an automated ceremony:
+1. **PENDING**: round created, awaiting EA key ceremony.
+2. **ACTIVE**: ceremony complete, voting window open. Voters may delegate,
+   vote, and submit shares (see [^draft-voting-protocol]).
+3. **TALLYING**: `vote_end_time` has passed. Tally decryption runs
+   automatically (see [^draft-ceremony]).
+4. **COMPLETE**: tally published and verifiable.
 
-1. **Eligibility snapshot**: all validators with a registered Pallas public
-   key at the time of round creation are eligible.
-
-2. **Dealer selection**: the next block proposer is automatically selected
-   as the dealer. The dealer generates $\mathsf{ea\_sk}$, computes
-   $\mathsf{ea\_pk} = \mathsf{ea\_sk} \cdot G$, and encrypts
-   $\mathsf{ea\_sk}$ to each eligible validator using ECIES [^ecies]
-   (ephemeral ECDH on Pallas curve with ChaCha20-Poly1305 symmetric
-   encryption).
-
-3. **Auto-ACK**: each eligible validator decrypts $\mathsf{ea\_sk}$,
-   verifies that $\mathsf{ea\_sk} \cdot G = \mathsf{ea\_pk}$, and submits
-   an ACK message via `PrepareProposal`.
-
-4. **Confirmation**:
-   - _Fast path_: all eligible validators ACK — the ceremony confirms
-     immediately.
-   - _Timeout path_ (30 minutes): if at least one-third of eligible
-     validators have ACK'd, the ceremony confirms and non-ACK'd validators
-     are stripped from the round. Non-ACK'd validators increment a
-     consecutive-miss counter; after 3 consecutive misses, the validator is
-     jailed.
-   - _Failure_: if fewer than one-third ACK within the timeout, the
-     ceremony resets and a new dealer is selected.
-
-5. On successful confirmation, the round transitions from **PENDING** to
-   **ACTIVE** and voting can begin.
-
-### Voting Window
-
-The voting window spans five phases. This section describes the operational
-flow; see the Voting Protocol ZIP [^draft-voting-protocol] for circuit
-specifications and cryptographic details.
-
-#### Phase 1 — Delegation
-
-The voter proves ownership of one or more Orchard notes at the snapshot
-height and delegates voting weight to a locally-generated hotkey. For each
-note:
-
-1. The voter retrieves a nullifier exclusion proof from the PIR server
-   (see [^draft-pir]) to prove the note was unspent at the snapshot.
-2. The voter generates a claim proof as specified in
-   [^draft-balance-proof], demonstrating note ownership and revealing the
-   note's governance alternate nullifier.
-3. A delegation transaction is submitted to the vote chain, creating a
-   Vote Authority Note (VAN) bound to the hotkey.
-
-The vote chain records the governance alternate nullifier to prevent
-double-delegation of the same note.
-
-#### Phase 2 — Voting
-
-Using the hotkey, the voter casts a vote on one or more proposals:
-
-1. The hotkey consumes a VAN and produces a new VAN with the relevant
-   proposal bit cleared, plus a Vote Commitment (VC) containing encrypted
-   shares under $\mathsf{ea\_pk}$.
-2. The vote transaction includes a zero-knowledge proof that the VC is
-   well-formed and the encrypted shares are consistent with the voter's
-   weight.
-3. The VC is inserted into the Vote Commitment Tree.
-
-The VAN nullifier is recorded to prevent double-voting on the same
-proposal.
-
-#### Phase 4 — Share Submission
-
-After voting, the wallet sends individual encrypted shares to one or more
-helper servers. Shares are encrypted under $\mathsf{ea\_pk}$ using El
-Gamal.
-
-#### Phase 5 — Share Reveal
-
-Helper servers construct a proof that each share belongs to a valid VC in
-the Vote Commitment Tree and submit the share to the vote chain at a
-randomized delay. The vote chain:
-
-1. Verifies the share reveal proof.
-2. Records the share nullifier to prevent double-reveal.
-3. Accumulates the El Gamal ciphertext homomorphically into the per
-   (proposal, decision) aggregate.
-
-### Tally and Results
-
-After `vote_end_time` passes, the round transitions to the **TALLYING**
-state:
-
-1.  The block proposer loads $\mathsf{ea\_sk}$ and decrypts the aggregate
-    ciphertext for each (proposal, decision) pair:
-
-    $$
-    \mathsf{total\_value} \cdot G = C_{2,\text{agg}} - \mathsf{ea\_sk} \cdot C_{1,\text{agg}}
-    $$
-
-2.  The proposer recovers $\mathsf{total\_value}$ from
-    $\mathsf{total\_value} \cdot G$ using baby-step-giant-step discrete
-    logarithm (feasible because $\mathsf{total\_value}$ is bounded by total
-    ZEC supply).
-
-3.  The proposer submits `MsgSubmitTally` with the recovered values and a
-    Chaum-Pedersen DLEQ proof [^cp92] demonstrating correct decryption.
-
-4.  Results are queryable via the REST API:
-
-        GET /zally/v1/tally-results/{round_id}
-
-    The response contains, for each (proposal, decision) pair, the
-    `total_value` in zatoshi. Clients map each `vote_decision` index back
-    to the option label defined in the proposal (e.g., "Support" /
-    "Oppose").
-
-## Timing and Deadlines
+### Timing Parameters
 
 | Parameter                      | Value        | Notes                         |
 | ------------------------------ | ------------ | ----------------------------- |
-| Ceremony deal timeout          | ~30 blocks   | TBD; time for dealer message  |
-| ACK phase timeout              | 30 minutes   | Fixed                         |
-| Consecutive ceremony miss jail | 3 misses     | Validator jailed, not slashed |
+| EA ceremony timing             |              | See [^draft-ceremony]         |
 | Voting window                  | Configurable | Set by `vote_end_time`        |
 | Tally computation              | Automatic    | Triggered after window closes |
-| Slashing fractions             | 0            | Jailing only, no token burns  |
 
 ## Verification and Auditing
 
@@ -534,15 +345,13 @@ round:
   double-spending.
 - Recompute the aggregate El Gamal ciphertexts per (proposal, decision)
   from individual share reveals.
-- Verify the DLEQ proof in `MsgSubmitTally` to confirm correct decryption.
-
-The $\mathsf{ea\_sk}$ file for each round is retained indefinitely
-(32 bytes per key) to allow future retally or audit. Keys are never
-deleted.
+- Verify the DLEQ proof in `MsgSubmitTally` to confirm correct decryption
+  (see [^draft-ceremony]).
 
 No trust in the Election Authority or validators is required for tally
 verification: the DLEQ proof is independently checkable by any party with
 access to the chain state.
+
 
 # Rationale
 
@@ -551,64 +360,13 @@ for governance with ZKP-optimized state transitions (Poseidon hashing, custom
 transaction types). Zcash mainnet's transaction throughput and scripting model
 are not designed for interactive multi-phase voting protocols.
 
-**Per-round EA key ceremony**: scoping $\mathsf{ea\_sk}$ to a single round
-limits the impact of key compromise to that round only. Validator rotation
-between rounds is handled naturally — departing validators cannot decrypt
-future rounds. This avoids the complexity of re-initialization or long-lived
-key management.
-
-**Helper servers**: mobile wallets cannot reliably perform background
-computation or maintain persistent connections. Helper servers buffer
-encrypted shares and submit them with randomized delays, allowing voters to
-complete all interaction in a single session.
-
-**16 shares per vote**: balances privacy amplification against bandwidth
-cost. This value is expected to increase in future revisions as bandwidth
-constraints relax.
-
-# Security Considerations
-
-**Trust model**: all validators that ACK the EA ceremony hold
-$\mathsf{ea\_sk}$ for the round. If any validator is compromised, vote
-amount privacy is broken for that round (the adversary can decrypt
-individual shares). However, voter identity remains protected because
-alternate nullifiers are unlinkable to on-chain spending.
-
-**Key isolation**: each round uses a different $\mathsf{ea\_sk}$. A
-validator that departs or is compromised after one round cannot decrypt
-votes in subsequent rounds.
-
-**Spam resistance**: each delegation requires a valid zero-knowledge proof
-(computationally expensive to generate) and the minimum voting weight of
-0.125 ZEC (12,500,000 zatoshi) limits the number of ballots an adversary
-can create.
-
-**Trusted dealer**: the current ceremony uses a single dealer that
-generates $\mathsf{ea\_sk}$. The dealer learns $\mathsf{ea\_sk}$ by
-construction. A future upgrade path is threshold secret sharing (t-of-n
-with Feldman commitments), followed by distributed key generation (DKG)
-that eliminates the trusted dealer entirely.
-
-**Helper server trust**: helper servers see encrypted shares and the
-voter's decision index, but not plaintext amounts or voter identity. The
-trust requirement is that helper servers do not leak timing metadata that
-could link a wallet submission to its on-chain share reveal.
-
-**Validator power distribution**: the bootstrap operator controls initial
-power distribution via funding amounts. An even distribution across
-validators reduces the risk of consensus capture.
-
-**Post-quantum considerations**: El Gamal encryption is breakable by a
-quantum adversary with a sufficiently large quantum computer. A successful
-quantum attack would expose individual share amounts and delegation
-amounts for the affected round. Hotkeys are never published on-chain and
-remain safe. Post-quantum migration is out of scope for this ZIP.
 
 # Reference implementation
 
 [z-cale/zally](https://github.com/z-cale/zally) — a Go and Rust
 implementation built on Cosmos SDK with Halo 2 zero-knowledge proof
 circuits.
+
 
 # References
 
@@ -620,14 +378,10 @@ circuits.
 
 [^draft-voting-protocol]: [Draft ZIP: Zcash Shielded Voting Protocol](draft-valargroup-voting-protocol.md)
 
+[^draft-ceremony]: [Draft ZIP: Election Authority Key Ceremony](draft-valargroup-ea-key-ceremony.md)
+
 [^draft-pir]: [Draft ZIP: Private Information Retrieval for Nullifier Exclusion Proofs](draft-valargroup-gov-pir.md)
 
 [^draft-onchain-voting]: [Draft ZIP: On-chain Accountable Voting](draft-ecc-onchain-accountable-voting.md)
 
-[^elgamal]: [T. ElGamal, "A public key cryptosystem and a signature scheme based on discrete logarithms", IEEE Transactions on Information Theory, vol. 31, no. 4, pp. 469-472, 1985](https://doi.org/10.1109/TIT.1985.1057074)
-
-[^cp92]: [D. Chaum and T. P. Pedersen, "Wallet Databases with Observers", in Advances in Cryptology — CRYPTO '92, pp. 89-105, 1993](https://doi.org/10.1007/3-540-48071-4_7)
-
 [^blake2]: [J.-P. Aumasson, S. Neves, Z. Wilcox-O'Hearn, and C. Winnerlein, "BLAKE2: simpler, smaller, fast as MD5", in Applied Cryptography and Network Security, pp. 119-135, 2013](https://doi.org/10.1007/978-3-642-38980-1_8)
-
-[^ecies]: [V. Shoup, "A Proposal for an ISO Standard for Public Key Encryption", version 2.1, 2001](https://www.shoup.net/papers/iso-2_1.pdf)
