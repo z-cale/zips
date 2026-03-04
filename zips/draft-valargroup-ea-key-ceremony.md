@@ -262,6 +262,23 @@ $\mathsf{pk}_i = \mathsf{sk}_i \cdot G$, and plaintext $m$
 A fresh ephemeral scalar $e_i$ MUST be generated for each validator to
 prevent cross-validator key correlation.
 
+## Pallas Key Registration
+
+Before participating in any ceremony, a validator MUST register a
+Pallas public key on-chain. Two registration paths are available:
+
+- `MsgRegisterPallasKey`: for an existing bonded validator.
+- `MsgCreateValidatorWithPallasKey`: atomically creates a staking
+  validator and registers the Pallas key in a single transaction.
+
+The submitted key MUST be a 32-byte compressed Pallas point that is on
+the curve and is not the identity point. Each validator operator address
+MAY register at most one Pallas key; duplicate registrations MUST be
+rejected.
+
+The registered key persists across rounds and is used for ECIES key
+exchange during each ceremony the validator participates in.
+
 ## Ceremony Protocol
 
 Each voting round triggers a fresh EA key ceremony after the round enters
