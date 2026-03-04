@@ -58,12 +58,30 @@ EA key ceremony terms, see [^draft-ceremony]. For PIR-related terms, see
 
 # Abstract
 
-This ZIP specifies the node operator and poll runner concerns for
-conducting a Zcash shielded coinholder vote: vote chain infrastructure
-setup, validator onboarding, voting round configuration, and tally
-verification. For the EA key ceremony protocol, see [^draft-ceremony].
-For the voter-facing voting protocol (delegation, vote casting, share
-reveal), see [^draft-voting-protocol].
+This ZIP specifies how to operate the infrastructure for Zcash shielded
+coinholder voting. It defines a purpose-built vote chain built on Cosmos
+SDK, three operator roles (bootstrap operator, vote manager, validator),
+and the lifecycle of a voting round from snapshot selection through tally
+verification.
+
+The vote chain stores vote commitments in a Poseidon Merkle tree, tracks
+three nullifier sets to prevent double-voting, and accumulates encrypted
+vote shares as homomorphic El Gamal ciphertexts. Each transaction
+(delegation, vote, share reveal) is verified by a zero-knowledge proof
+on-chain. Validators join through an automated onboarding script that
+handles binary distribution, key generation, and on-chain registration.
+A separate nullifier service provides private information retrieval of
+exclusion proofs so voters can prove note non-spending without revealing
+which notes they hold.
+
+Tally correctness is independently verifiable by any party: a DLEQ proof
+in the tally submission allows anyone with access to the chain state to
+confirm correct decryption without trusting the Election Authority or
+validators.
+
+The EA key ceremony protocol is specified in [^draft-ceremony]. The
+voter-facing protocol (delegation, vote casting, share reveal) is
+specified in [^draft-voting-protocol].
 
 
 # Motivation
@@ -193,82 +211,73 @@ building from source. See [Onboarding Validators].
 
 ### Genesis Validator Setup
 
-Prerequisites:
+The bootstrap operator builds the vote chain binary (Go + Rust FFI for
+Halo 2 and RedPallas verification), initializes a single-validator chain,
+and starts the node. The reference implementation repository [^ref-impl]
+contains step-by-step instructions (`SETUP_GENESIS.md`) and mise task
+automation.
 
-- Linux or macOS
-- Go 1.24 or later
-- Rust 1.83 or later
-- C toolchain (GCC or Clang)
-
-Build the vote chain binary:
-
-    git clone https://github.com/z-cale/zally
-    cd zally/sdk
-    make install-ffi
-
-Initialize the chain:
-
-    zallyd init <moniker> --chain-id zvote-1
-
-This generates a Pallas keypair for the EA ceremony and configures the
-REST API on port 1317.
-
-Network ports:
+Initialization generates a Cosmos validator key, a Pallas keypair for the
+EA ceremony, and a genesis block with the chain ID `zvote-1`. The node
+exposes:
 
 | Port  | Protocol | Exposure | Purpose              |
 | ----- | -------- | -------- | -------------------- |
 | 26656 | P2P      | Public   | Peer-to-peer gossip  |
 | 26657 | RPC      | Local    | CometBFT RPC         |
-| 1317  | REST     | Public   | Application REST API |
+| 1318  | REST     | Public   | Application REST API |
 
-Start the chain and verify that block production begins:
-
-    zallyd start
-    curl http://localhost:26657/status
+After the chain is producing blocks, the bootstrap operator registers the
+node's public URL in the service discovery layer (see [Service Discovery])
+so that joining validators and wallet clients can find the network.
 
 ### Onboarding Validators
 
-**Automated flow** (`join.sh`):
+New validators join through `join.sh`, a self-contained script that
+requires no local clone of the repository. See `SETUP_JOIN.md` in
+[^ref-impl] for full details. The script:
 
-1. Download prebuilt binaries.
-2. Discover the network via service discovery (see [Service Discovery]).
-3. Fetch genesis and sync to current height.
-4. Generate consensus, account, and Pallas keypairs.
-5. Request funding from the bootstrap operator via the admin UI.
-6. Auto-register with `MsgCreateValidatorWithPallasKey`.
+1. Downloads pre-built `zallyd` and `create-val-tx` binaries and
+   verifies their SHA-256 checksums.
+2. Discovers a live validator via the service discovery API.
+3. Fetches genesis and syncs to the current height.
+4. Generates consensus, account, and Pallas keypairs.
+5. Self-registers with the service discovery API (appears as "pending"
+   in the admin UI).
+6. Waits for the bootstrap operator to approve and fund the validator
+   via the admin UI.
+7. On receiving funds, auto-registers on-chain with
+   `MsgCreateValidatorWithPallasKey`.
 
-**Source-based flow**:
-
-    mise run validator:join
-
-**Funding**: the bootstrap operator sends tokens to the validator's account
-address. The funding amount equals the validator's consensus voting power.
+The funding amount equals the validator's consensus voting power.
+Developers with a local clone can alternatively run
+`mise run validator:join`, which builds from source and then runs the
+same `join.sh` flow.
 
 ### Nullifier Service (PIR Server)
 
-The nullifier service provides nullifier exclusion proofs to voters
-via PIR.
+The nullifier service provides nullifier exclusion proofs to voters via
+PIR. See `SETUP_NULLIFIER_SERVICE.md` in [^ref-impl] for operational
+setup.
 
-**Bootstrap**:
+The service pipeline:
 
-1. Ingest Orchard nullifiers from Zcash mainnet via `lightwalletd`.
-2. Build the Indexed Merkle Tree (nullifier non-membership tree) as
-   specified in [^draft-balance-proof].
-3. Prepare the three-tier PIR database as specified in [^draft-pir].
-
-**Serve**: expose a query endpoint for voters to privately retrieve
-exclusion proofs. See [^draft-pir] for the YPIR+SP protocol and query
-mechanics.
+1. **Ingest**: fetch Orchard nullifiers from Zcash mainnet via a
+   lightwallet server (`lightwalletd`), or download a pre-built snapshot.
+2. **Export**: build the nullifier non-membership tree (Indexed Merkle
+   Tree as specified in [^draft-balance-proof]) and export the three-tier
+   PIR database as specified in [^draft-pir].
+3. **Serve**: expose a query endpoint on port 3000 for voters to
+   privately retrieve exclusion proofs.
 
 ### Service Discovery
 
-A configuration API (currently hosted on Vercel) stores:
+Validator and PIR server URLs are published to a Vercel Edge Config store,
+managed through the admin UI. Wallet clients and the `join.sh` script
+query this API to discover:
 
-- Validator P2P addresses and REST API URLs.
-- PIR server URLs.
-
-Wallet clients and the `join.sh` script discover the network through this
-API.
+- Vote chain REST API endpoints.
+- PIR server endpoints.
 
 ## Conducting a Voting Round
 
@@ -366,12 +375,33 @@ for governance with ZKP-optimized state transitions (Poseidon hashing, custom
 transaction types). Zcash mainnet's transaction throughput and scripting model
 are not designed for interactive multi-phase voting protocols.
 
+**Cosmos SDK**: provides a mature BFT consensus engine (CometBFT),
+staking and slashing modules, and a transaction pipeline that can be
+extended with custom message types and ante handlers for ZKP verification.
+The alternative — building a chain from scratch — would duplicate
+well-tested consensus infrastructure.
+
+**Poseidon for vote round ID**: the vote round ID enters ZKP circuits as
+a public input, so it must be a valid field element. Poseidon is
+circuit-friendly (low constraint count) compared to Blake2b or SHA-256,
+which would require expensive bit decomposition inside the circuit.
+
+**Funding equals voting power**: tying validator consensus power to
+funding amount gives the bootstrap operator explicit control over power
+distribution. An even distribution reduces the risk of a single validator
+capturing consensus or disrupting the EA key ceremony.
+
+**Automated validator onboarding**: `join.sh` eliminates manual
+coordination between the bootstrap operator and joining validators. The
+self-registration, admin-approval, and auto-bonding flow allows the
+network to grow without requiring validators to build from source or
+understand Cosmos SDK tooling.
+
 
 # Reference implementation
 
-[z-cale/zally](https://github.com/z-cale/zally) — a Go and Rust
-implementation built on Cosmos SDK with Halo 2 zero-knowledge proof
-circuits.
+[^ref-impl] — a Go and Rust implementation built on Cosmos SDK with
+Halo 2 zero-knowledge proof circuits.
 
 
 # References
@@ -389,3 +419,5 @@ circuits.
 [^draft-pir]: [Draft ZIP: Private Information Retrieval for Nullifier Exclusion Proofs](draft-valargroup-gov-pir.md)
 
 [^draft-onchain-voting]: [Draft ZIP: On-chain Accountable Voting](draft-ecc-onchain-accountable-voting.md)
+
+[^ref-impl]: [z-cale/zally: Zcash Shielded Voting reference implementation](https://github.com/z-cale/zally)
