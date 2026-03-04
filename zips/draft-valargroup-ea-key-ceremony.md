@@ -63,12 +63,25 @@ Verification key
 
 This ZIP specifies the Election Authority (EA) key ceremony used in
 Zcash shielded coinholder voting. Each voting round requires a fresh
-El Gamal keypair for encrypting vote shares. The ceremony uses Shamir
-threshold secret sharing to split the secret key into shares
-distributed to validators via ECIES, so that no single validator holds
-the complete key. Threshold decryption allows any $t$ validators to
-cooperatively decrypt the aggregated tally, which is then publicly
-verifiable via Chaum-Pedersen DLEQ proofs.
+El Gamal keypair: vote shares are encrypted under the EA public key,
+homomorphically aggregated on-chain, and decrypted after the voting
+window closes to produce a verifiable tally.
+
+The ceremony is triggered automatically when a voting round enters the
+PENDING state. The block proposer acts as the dealer: it generates the
+EA keypair, splits the secret key into Shamir shares with threshold
+$t = \lceil n/2 \rceil$, encrypts each share to the recipient
+validator's Pallas public key via ECIES, and publishes the encrypted
+shares and verification keys to the chain. Validators decrypt and
+acknowledge their shares; the ceremony confirms when a majority of
+eligible validators have acknowledged.
+
+After the voting window closes, at least $t$ validators submit partial
+decryptions that are combined via Lagrange interpolation to recover the
+aggregate plaintext. A Chaum-Pedersen DLEQ proof published alongside
+the tally allows any party to verify correct decryption against the
+on-chain aggregate ciphertexts and the EA public key, without trusting
+the Election Authority or any individual validator.
 
 
 # Motivation
@@ -134,7 +147,7 @@ this section for vote share encryption.
 
 ### Setup
 
-Let $G$ be the Pallas generator defined as
+Let $G$ be the Pallas [^protocol-pallasandvesta] generator defined as
 $\mathcal{G}^{\mathsf{Orchard}}$ in the Zcash protocol
 specification [^protocol-orchardkeycomponents] (the Orchard spend
 authorization base point). Let $\mathbb{F}_q$ denote the scalar field of
@@ -230,8 +243,8 @@ No trust in the EA or validators is required.
 
 ## ECIES on Pallas
 
-This section defines the ECIES construction used to distribute Shamir
-shares to validators during the ceremony.
+This section defines the ECIES [^ecies] construction used to distribute
+Shamir shares to validators during the ceremony.
 
 For a recipient validator $V_i$ with Pallas public key
 $\mathsf{pk}_i = \mathsf{sk}_i \cdot G$, and plaintext $m$
@@ -463,16 +476,13 @@ migration is out of scope for this ZIP.
 
 # Reference implementation
 
-[z-cale/zally](https://github.com/z-cale/zally) — a Go and Rust
-implementation built on Cosmos SDK with Halo 2 zero-knowledge proof
-circuits.
+[^ref-impl] — a Go and Rust implementation built on Cosmos SDK with
+Halo 2 zero-knowledge proof circuits.
 
 
 # References
 
 [^BCP14]: [Information on BCP 14 — "RFC 2119: Key words for use in RFCs to Indicate Requirement Levels" and "RFC 8174: Ambiguity of Uppercase vs Lowercase in RFC 2119 Key Words"](https://www.rfc-editor.org/info/bcp14)
-
-[^zip-1016]: [ZIP 1016: Community and Coinholder Funding Model](zip-1016.md)
 
 [^draft-coinholder-voting]: [Draft ZIP: Zcash Shielded Coinholder Voting](draft-valargroup-coinholder-voting-setup.md)
 
@@ -489,3 +499,5 @@ circuits.
 [^protocol-pallasandvesta]: [Zcash Protocol Specification, Version 2025.6.3 [NU6.1]. Section 5.4.9.6: Pallas and Vesta](protocol/protocol.pdf#pallasandvesta)
 
 [^protocol-orchardkeycomponents]: [Zcash Protocol Specification, Version 2025.6.3 [NU6.1]. Section 4.2.3: Orchard Key Components](protocol/protocol.pdf#orchardkeycomponents)
+
+[^ref-impl]: [z-cale/zally: Zcash Shielded Voting reference implementation](https://github.com/z-cale/zally)
