@@ -262,7 +262,8 @@ The service pipeline (each step has a corresponding
    lightwallet server (`lightwalletd`), or download a pre-built snapshot.
 2. **Export**: build the nullifier non-membership tree (Indexed Merkle
    Tree as specified in [^draft-balance-proof]) and export the three-tier
-   PIR database as specified in [^draft-pir].
+   PIR database as specified in [^draft-pir]. The exported files allow
+   the server to restart without rebuilding the tree from raw nullifiers.
 3. **Serve**: expose a query endpoint for voters to privately retrieve
    exclusion proofs.
 
