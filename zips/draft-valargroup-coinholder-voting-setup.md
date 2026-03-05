@@ -388,10 +388,13 @@ transaction pipeline that can be extended with custom message types and
 ante handlers for ZKP verification. The alternative — building a chain
 from scratch — would duplicate well-tested consensus infrastructure.
 
-**Funding equals voting power**: tying validator consensus power to
-funding amount gives the bootstrap operator explicit control over power
-distribution. An even distribution reduces the risk of a single validator
-capturing consensus or disrupting the EA key ceremony.
+**Funding equals voting power**: bonding serves three purposes: it
+determines which validators participate in consensus and the EA key
+ceremony (and thus can decrypt the tally), it enables jailing of
+inactive validators who miss blocks or ceremony acknowledgements, and
+an even funding split gives each validator a roughly equal probability
+of becoming the block proposer — not important for correctness, but
+important for liveness.
 
 **Automated validator onboarding**: `join.sh` eliminates manual
 coordination between the bootstrap operator and joining validators. The
