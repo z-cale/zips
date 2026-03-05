@@ -187,7 +187,8 @@ The bootstrap operator generates the vote chain genesis block, funds
 validators from the token reserve, and controls initial consensus power
 distribution. Funding amount determines each validator's consensus voting
 power. An even distribution across validators reduces the risk of consensus
-capture.
+capture. This is a one-time role at genesis; after the initial validator
+set is funded, the bootstrap operator role ceases to exist.
 
 ### Vote Manager
 
