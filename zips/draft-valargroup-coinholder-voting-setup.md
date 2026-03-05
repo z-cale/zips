@@ -400,8 +400,8 @@ network to grow without requiring validators to build from source or
 understand Cosmos SDK tooling.
 
 **Vote manager reassignment by any validator**: the current design allows
-any bonded validator to reassign the vote manager role. A TSS-based
-reassignment (requiring a threshold of validators to agree) would be
+any bonded validator to reassign the vote manager role. A threshold-based
+reassignment (requiring a supermajority of validators to agree) would be
 more robust against a single rogue validator seizing control of round
 creation. This is deferred for scope reasons — in the worst case, a
 compromised vote manager can only create rounds, not forge votes, and the
@@ -411,7 +411,7 @@ mitigation is to spin up a new chain with the fix.
 # Open Issues
 
 - **Vote manager reassignment governance**: should reassignment of the
-  vote manager require a threshold signature (TSS) from validators rather
+  vote manager require a supermajority vote from validators rather
   than any single bonded validator? See the Rationale entry above.
 
 
