@@ -388,11 +388,6 @@ transaction pipeline that can be extended with custom message types and
 ante handlers for ZKP verification. The alternative — building a chain
 from scratch — would duplicate well-tested consensus infrastructure.
 
-**Poseidon for vote round ID**: the vote round ID enters ZKP circuits as
-a public input, so it must be a valid field element. Poseidon is
-circuit-friendly (low constraint count) compared to Blake2b or SHA-256,
-which would require expensive bit decomposition inside the circuit.
-
 **Funding equals voting power**: tying validator consensus power to
 funding amount gives the bootstrap operator explicit control over power
 distribution. An even distribution reduces the risk of a single validator
