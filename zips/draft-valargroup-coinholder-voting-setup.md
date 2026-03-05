@@ -378,6 +378,12 @@ for governance with ZKP-optimized state transitions (Poseidon hashing, custom
 transaction types). Zcash mainnet's transaction throughput and scripting model
 are not designed for interactive multi-phase voting protocols.
 
+**Orchard-only snapshots**: the voting protocol is built on Orchard's
+circuit-friendly primitives (Poseidon hashing, Pallas curve). Sapling
+and transparent pools use incompatible cryptographic constructions.
+Coinholders who wish to participate can migrate funds to Orchard before
+the snapshot.
+
 **Cosmos SDK**: provides a mature BFT consensus engine (CometBFT),
 validator lifecycle management (bonding, jailing for missed blocks or
 missed ceremony acknowledgements, consensus power distribution), and a
