@@ -135,12 +135,10 @@ companion ZIPs.
 
 - Governance policy decisions such as proposal eligibility, quorum
   requirements, and fund disbursement rules (see ZIP 1016 [^zip-1016]).
-- The cryptographic proof-of-balance protocol (see [^draft-balance-proof]).
-- Voter-facing protocol: delegation, vote casting, share splitting, and
-  share reveal circuits (see [^draft-voting-protocol]).
-- EA key ceremony protocol and tally decryption (see [^draft-ceremony]).
-- PIR protocol details (see [^draft-pir]).
-- On-chain accountable voting (see [^draft-onchain-voting]).
+- Cryptographic protocols and voter-facing interactions (proof-of-balance,
+  key ceremony, PIR, delegation, vote casting, share reveal, on-chain
+  accountable voting) — see [^draft-voting-protocol] and its companion
+  ZIPs.
 
 
 # Specification
