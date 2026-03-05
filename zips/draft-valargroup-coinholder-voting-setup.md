@@ -45,6 +45,12 @@ Validator
 : A vote chain consensus participant. See [Validator] under Roles for
   responsibilities and keypair details.
 
+Election Authority (EA)
+: A virtual signing key, jointly constructed by validators during a key
+  ceremony so that no single party holds the private key. Used to encrypt
+  vote shares and decrypt the final tally. See [^draft-ceremony] for the
+  ceremony protocol.
+
 Snapshot height
 : The Zcash mainnet block height at which eligible Orchard note balances
   are captured. See [Snapshot Configuration] for constraints.
