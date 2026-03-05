@@ -271,15 +271,16 @@ same `join.sh` flow.
 The nullifier service provides nullifier exclusion proofs to voters via
 PIR.
 
-The service pipeline:
+The service pipeline (each step has a corresponding
+`mise run nullifier:<step>` task):
 
 1. **Ingest**: fetch Orchard nullifiers from Zcash mainnet via a
    lightwallet server (`lightwalletd`), or download a pre-built snapshot.
 2. **Export**: build the nullifier non-membership tree (Indexed Merkle
    Tree as specified in [^draft-balance-proof]) and export the three-tier
    PIR database as specified in [^draft-pir].
-3. **Serve**: expose a query endpoint on port 3000 for voters to
-   privately retrieve exclusion proofs.
+3. **Serve**: expose a query endpoint for voters to privately retrieve
+   exclusion proofs.
 
 ### Service Discovery
 
