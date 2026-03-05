@@ -42,6 +42,10 @@ Validator
 : A vote chain consensus participant that maintains keypairs for
   consensus, account transactions, and Pallas-based key exchange.
 
+Vote Manager (VM):
+: A role defined in the vote chain that grants the permissions for validators
+  to enter the set.
+
 Voting round
 : A complete instance of a coinholder vote, scoped to a single Zcash
   mainnet snapshot and a fresh EA key.
@@ -54,25 +58,21 @@ Threshold ($t$)
 : The minimum number of shares required to reconstruct
   $\mathsf{ea\_sk}$ or perform threshold decryption.
 
-Verification key
-: A per-validator public commitment $\mathsf{VK}_i = f(i) \cdot G$
-  used to verify that a validator received a correct share.
-
-
 # Abstract
 
 This ZIP specifies the Election Authority (EA) key ceremony used in
-Zcash shielded coinholder voting. Each voting round requires a fresh
-El Gamal keypair: vote shares are encrypted under the EA public key,
-homomorphically aggregated on-chain, and decrypted after the voting
-window closes to produce a verifiable tally.
+Zcash shielded coinholder voting. The ceremony runs on a dedicated
+Proof-of-Authority vote chain with rotating proposers whose bonded validators
+serve as ceremony participants. Each voting round requires a fresh El Gamal keypair:
+vote shares are encrypted under the EA public key, homomorphically
+aggregated on-chain, and decrypted after the voting window closes to
+produce a verifiable tally.
 
 The ceremony is triggered automatically when a voting round enters the
 PENDING state. The block proposer acts as the dealer: it generates the
 EA keypair, splits the secret key into Shamir shares with threshold
-$t = \lceil n/2 \rceil$, encrypts each share to the recipient
-validator's Pallas public key via ECIES, and publishes the encrypted
-shares and verification keys to the chain. Validators decrypt and
+$t = \lceil n/2 \rceil + 1$, encrypts each share to the recipient
+validator's Pallas public key via ECIES. Validators decrypt and
 acknowledge their shares; the ceremony confirms when a majority of
 eligible validators have acknowledged.
 
@@ -106,7 +106,7 @@ This ZIP specifies the automated ceremony that addresses these concerns.
   eliminate this (see [Rationale]).
 - Individual validators hold only a Shamir share of
   $\mathsf{ea\_sk}$, not the full key. An adversary needs to compromise
-  at least $t$ validators (where $t = \lceil n/2 \rceil$) to
+  at least $t$ validators (where $t = \lceil n/2 \rceil + 1$) to
   reconstruct the secret and decrypt individual vote shares.
   Voter identity remains protected because alternate nullifiers are
   unlinkable to on-chain spending.
@@ -137,6 +137,27 @@ This ZIP specifies the automated ceremony that addresses these concerns.
 
 
 # Specification
+
+## Chain Assumptions
+
+This ZIP assumes that the vote chain is a Proof-of-Authority blockchain
+providing the following primitives:
+
+- A **CreateValidator** operation that bonds value to a validator. Used for authorizing a node entering the set.
+- In-protocol rule-based **jailing** that removes a validator from the active
+  consensus set without burning bonded stake, used as a liveness
+  penalty (e.g., for ceremony non-participation as specified in
+  [Confirmation]).
+
+The authority to become a validator is granted by VM.
+
+Proof-of-stake capability (bonding value) is the primitive that enables
+validator participation. The VM sends Vote Chain bonded amount to a new validator to join the active set.
+
+The requirement for the VM to approve a new Validator by sending them value
+is what makes this a proof-of-stake rather than a proof-of-authority chain.
+
+Jailing provides a liveness enforcement mechanism to expel validators who are down during the ceremony.
 
 ## El Gamal on Pallas
 
@@ -204,46 +225,25 @@ ballots).
 
 ## ECIES on Pallas
 
-This section defines the ECIES [^ecies] construction used to distribute
-Shamir shares to validators during the ceremony.
+Share distribution uses ECIES [^ecies] instantiated on Pallas with the
+following parameters:
 
-For a recipient validator $V_i$ with Pallas public key
-$\mathsf{pk}_i = \mathsf{sk}_i \cdot G$, and plaintext $m$
-(the serialized share $f(i)$):
+- **Key Encapsulation (KEM)**: ephemeral Diffie-Hellman on Pallas with
+  generator $G$.
+- **Key Derivation (KDF)**: $k = \mathsf{SHA256}(\mathsf{compress}(E) \| \mathsf{x}(S))$,
+  where $\mathsf{compress}$ is the 32-byte compressed Pallas point encoding
+  and $\mathsf{x}(S)$ extracts the $x$-coordinate by taking the compressed
+  encoding and clearing bit 7 of byte 31 (the sign bit).
+- **Symmetric Encryption (DEM)**: ChaCha20-Poly1305 with a zero nonce.
 
-**Encryption** (by the dealer):
-
-1. Generate ephemeral scalar $e_i \leftarrow \mathbb{F}_q$
-   and compute ephemeral public key $E_i = e_i \cdot G$.
-2. Compute ECDH shared secret $S_i = e_i \cdot \mathsf{pk}_i$.
-3. Derive symmetric key
-   $k_i = \mathsf{SHA256}(\mathsf{compress}(E_i) \| \mathsf{x}(S_i))$
-   where $\mathsf{compress}$ is the 32-byte compressed Pallas point
-   encoding and $\mathsf{x}(S_i)$ is the $x$-coordinate of $S_i$
-   extracted by taking the compressed encoding and clearing bit 7 of
-   byte 31 (the sign bit).
-4. Encrypt: $\mathsf{ct}_i = \mathsf{ChaCha20\text{-}Poly1305}(k_i, \mathsf{nonce}{=}0, m)$.
-5. Output $(E_i, \mathsf{ct}_i)$.
-
-**Decryption** (by validator $V_i$):
-
-1. Compute $S_i = \mathsf{sk}_i \cdot E_i$.
-2. Derive $k_i = \mathsf{SHA256}(\mathsf{compress}(E_i) \| \mathsf{x}(S_i))$.
-3. Decrypt $m = \mathsf{ChaCha20\text{-}Poly1305.decrypt}(k_i, \mathsf{nonce}{=}0, \mathsf{ct}_i)$.
-4. Parse $m$ as share $f(i)$ and verify
-   $f(i) \cdot G = \mathsf{VK}_i$.
-
-A fresh ephemeral scalar $e_i$ MUST be generated for each validator to
-prevent cross-validator key correlation.
+A fresh ephemeral scalar MUST be generated for each recipient validator
+to prevent cross-validator key correlation. After decryption, the
+recipient MUST verify that $f(i) \cdot G = \mathsf{VK}_i$.
 
 ## Pallas Key Registration
 
 Before participating in any ceremony, a validator MUST register a
-Pallas public key on-chain. Two registration paths are available:
-
-- `MsgRegisterPallasKey`: for an existing bonded validator.
-- `MsgCreateValidatorWithPallasKey`: atomically creates a staking
-  validator and registers the Pallas key in a single transaction.
+Pallas public key on the vote chain.
 
 The submitted key MUST be a 32-byte compressed Pallas point that is on
 the curve and is not the identity point. Each validator operator address
@@ -270,7 +270,7 @@ The next block proposer is automatically selected as the dealer.
 ### Key Generation and Distribution
 
 Let $n$ be the number of eligible validators and
-$t = \lceil n/2 \rceil$ (minimum 2) be the threshold.
+$t = \lceil n/2 \rceil + 1$ (minimum 2) be the threshold.
 
 The dealer:
 
@@ -283,14 +283,12 @@ The dealer:
    $a_1, \ldots, a_{t-1} \leftarrow \mathbb{F}_q$.
 3. Evaluates $f(i)$ for $i = 1, \ldots, n$ to produce $n$ Shamir
    shares [^shamir].
-4. Computes verification keys $\mathsf{VK}_i = f(i) \cdot G$ for each
-   share.
-5. For each eligible validator $V_i$, encrypts the share $f(i)$ to
+4. For each eligible validator $V_i$, encrypts the share $f(i)$ to
    $\mathsf{pk}_i$ using the ECIES construction defined in
    [ECIES on Pallas], producing $(E_i, \mathsf{ct}_i)$.
-6. Publishes to the chain: $\mathsf{ea\_pk}$, the threshold $t$, all
+5. Publishes to the chain: $\mathsf{ea\_pk}$, the threshold $t$, all
    $(E_i, \mathsf{ct}_i)$ pairs, and all $\mathsf{VK}_i$.
-7. Securely erases $\mathsf{ea\_sk}$, the polynomial coefficients, and
+6. Securely erases $\mathsf{ea\_sk}$, the polynomial coefficients, and
    all share values from memory.
 
 ### Validator Acknowledgment
@@ -311,16 +309,15 @@ The ceremony confirms under one of the following conditions:
 - **Fast path**: all eligible validators ACK. The ceremony confirms
   immediately.
 - **Timeout path**: after the ACK phase timeout (30 minutes), if at least
-  a majority of eligible validators have ACK'd (i.e.,
-  $\mathsf{acks} \times 2 \geq n$), the ceremony confirms. Non-ACK'd
+  $t$ eligible validators have ACK'd, the ceremony confirms. Non-ACK'd
   validators are stripped from the round and increment a
   consecutive-miss counter. After 3 consecutive misses, the validator
   MUST be jailed.
-- **Failure**: if fewer than a majority of eligible validators ACK within
-  the timeout, the ceremony resets and a new dealer is selected.
+- **Failure**: if fewer than $t$ eligible validators ACK within the
+  timeout, the ceremony resets and a new dealer is selected.
 
-The majority threshold ensures that at least $t$ shares are available
-for threshold decryption during the tally phase.
+The $t$-ACK requirement ensures that enough shares are available for
+threshold decryption during the tally phase.
 
 On successful confirmation, the round transitions from **PENDING** to
 **ACTIVE**.
@@ -329,9 +326,7 @@ On successful confirmation, the round transitions from **PENDING** to
 
 **Joining**: in the threshold model, new validators joining after the
 ceremony cannot receive an independent share without a new dealing round.
-An existing ACK'd validator MAY forward their own share to the new
-validator via [ECIES on Pallas], allowing the new validator to
-participate in threshold decryption using the forwarded share.
+A validator attempting to join the set during an active voting round MUST wait for the round to complete.
 
 **Leaving**: a departing validator retains their share $f(i)$ and cannot
 be forced to delete it. Under the threshold model, a single share does
@@ -381,9 +376,8 @@ Individual vote amounts are never revealed — only the aggregate total per
 
 ## Key Retention
 
-Each validator's share file for each round MUST be retained indefinitely
-(32 bytes per share) to allow future retally or audit. Share files MUST
-NOT be deleted.
+Each validator's share file for each round SHOULD be retained
+indefinitely (32 bytes per share) to allow future retally or audit.
 
 ## Timing Parameters
 
@@ -397,41 +391,167 @@ NOT be deleted.
 
 # Rationale
 
-**Per-round keys**: scoping $\mathsf{ea\_sk}$ to a single round limits the
-impact of key compromise to that round only. Validator rotation between
-rounds is handled naturally — departing validators cannot decrypt future
-rounds. This avoids the complexity of re-initialization or long-lived key
+## Why Per-Round Keys
+
+Scoping $\mathsf{ea\_sk}$ to a single round limits the impact of key
+compromise to that round only. Validator rotation between rounds is
+handled naturally — departing validators cannot decrypt future rounds.
+This avoids the complexity of re-initialization or long-lived key
 management.
 
-**Threshold secret sharing**: splitting $\mathsf{ea\_sk}$ into Shamir
-shares ensures that no single validator (other than the dealer at
-generation time) holds the complete secret key. Compromise of fewer than
-$t$ validators does not reveal the key. The threshold
-$t = \lceil n/2 \rceil$ balances liveness (not requiring all validators
-for decryption) with privacy (requiring a majority to collude for key
-reconstruction).
+## Why ECIES on Pallas
 
-**Trusted dealer with future DKG upgrade**: the dealer generates and
-momentarily holds $\mathsf{ea\_sk}$ before erasing it. This is simpler
-than a full distributed key generation (DKG) protocol and sufficient for
-the initial deployment, given that the dealer is a validator already
-trusted for consensus and is automatically rotated via block proposer
-selection. A future DKG upgrade would eliminate this trust assumption
-entirely by having validators jointly generate $\mathsf{ea\_pk}$ without
-any single party ever holding $\mathsf{ea\_sk}$.
-
-**ECIES on Pallas**: reuses the Pallas curve already present in the Orchard
+ECIES on Pallas reuses the Pallas curve already present in the Orchard
 protocol, avoiding additional curve dependencies. ChaCha20-Poly1305
 provides authenticated encryption.
 
-**Jailing, not slashing**: ceremony non-participation is penalized by
-jailing (excluding from future ceremonies) rather than token slashing.
-This is a liveness signal, not a safety violation.
+## Why CometBFT / Cosmos SDK
 
-**Post-quantum**: El Gamal encryption is breakable by a quantum adversary
-with a sufficiently large quantum computer. A successful attack would
-expose individual vote share amounts for the affected round. Post-quantum
-migration is out of scope for this ZIP.
+The vote chain is built on CometBFT consensus [^cometbft] with the
+Cosmos SDK [^cosmos-sdk] application framework. CometBFT provides
+instant finality (no probabilistic confirmation), deterministic block
+proposer rotation (used for dealer selection), and a well-defined
+validator set with bonded stake. The Cosmos SDK provides staking
+primitives — `CreateValidator`, delegation, jailing — out of the box,
+as well as a module-based architecture that allows voting-specific logic
+(Pallas key registration, ceremony orchestration, share aggregation) to
+be implemented as custom modules alongside the standard staking
+infrastructure. This avoids building consensus and validator management
+from scratch while inheriting battle-tested BFT guarantees from over
+100 production Cosmos chains.
+
+## Why Jailing, Not Slashing
+
+Ceremony non-participation is penalized by jailing (excluding from
+future ceremonies) rather than token slashing. This is a liveness
+signal, not a safety violation.
+
+## Why Threshold Secret Sharing
+
+The election authority key is split into Shamir shares rather than distributed intact to all validators. This
+ensures that compromise of any single validator (or any minority below
+$t$) does not expose the full decryption key. The threshold
+$t = \lceil n/2 \rceil + 1$ ensures that an adversary controlling fewer
+than half of validators cannot reach the decryption threshold. Under
+the standard CometBFT [^cometbft] assumption (fewer than one-third Byzantine),
+this provides an additional safety margin for vote-amount privacy.
+
+The decryption threshold $t$ is set equal to the number of ACKs
+required for ceremony confirmation. This is a deliberate constraint:
+if $t$ were strictly greater than the ACK requirement, the ceremony
+could confirm with fewer acknowledged validators than are needed for
+threshold decryption, making it impossible to decrypt the tally and
+creating an unrecoverable liveness failure. By requiring at least $t$
+ACKs before confirmation, the protocol guarantees that enough shares
+are available for decryption whenever the ceremony succeeds.
+
+The protocol uses a trusted dealer rather than distributed key
+generation (DKG). Feldman VSS commitments [^feldman] (which would let each
+validator verify that its share is consistent with
+$\mathsf{ea}\_\mathsf{pk}$) are omitted for initial scope; the dealer is
+trusted to distribute correct shares, and any tampering would be
+caught at tally time. Distributed key generation is a potential future
+enhancement (see [Open issues]).
+
+## Why No Per-Validator DLEQ Proofs
+
+Each validator's partial decryption $D_i = [s_i]\, \sum C_{1,j}$ is
+posted on-chain without a Chaum–Pedersen DLEQ proof [^chaum-pedersen]
+attesting that $s_i$ matches the validator's committed share. This is a
+deliberate simplification.
+
+Without DLEQ proofs, a malicious validator can post a bogus $D_i$. Any
+Lagrange combination that includes this $D_i$ will produce an incorrect
+message point, causing the baby-step giant-step search to fail or
+return an implausible result. However, a bogus $D_i$ cannot cause a
+wrong tally to be accepted: the decrypted result is publicly
+verifiable (anyone can check that the claimed
+$\mathsf{total}\_\mathsf{ballots}$ satisfies the decryption equation for
+the on-chain aggregate ciphertext), so a tally derived from a corrupted
+subset will always be detected.
+
+The missing DLEQ proofs are therefore a liveness issue, not a
+correctness one. A single malicious validator can force the tally
+procedure to try alternative subsets of size $t$ to find a fully honest
+quorum, delaying finalization. Under the CometBFT assumption that fewer
+than one-third of validators are Byzantine, such an honest quorum
+always exists.
+
+Adding per-validator DLEQ proofs would allow immediate identification
+and exclusion of misbehaving validators, reducing verification to
+$O(1)$ per partial decryption. This is left as a future enhancement
+(see [Open issues]).
+
+## Why Classical El Gamal Rather Than Post-Quantum Encryption
+
+The protocol uses El Gamal on the Pallas curve, which is vulnerable to a
+quantum adversary running Shor's algorithm. A sufficiently powerful
+quantum computer could recover $\mathsf{ea}\_\mathsf{sk}$ from
+$\mathsf{ea}\_\mathsf{pk}$ and decrypt individual vote share ciphertexts,
+breaking vote-amount privacy for any round whose on-chain ciphertexts
+were recorded.
+
+Post-quantum aggregatable encryption — a scheme that is both
+quantum-resistant and additively homomorphic — would eliminate this
+risk. However, no such scheme is mature enough for production use.
+Lattice-based homomorphic encryption exists in theory, but practical
+instantiations have ciphertext sizes, proving costs, and threshold
+decryption complexities that are orders of magnitude larger than
+El Gamal on an elliptic curve. The homomorphic tally
+(component-wise point addition of Pallas points) and the threshold
+decryption (Shamir/Feldman secret sharing with Lagrange interpolation
+over a scalar field) are both simple precisely because El Gamal
+operates in the same algebraic setting as the rest of the protocol.
+Replacing it would require a fundamentally different threshold
+protocol and circuit design for the Vote Proof and Vote Reveal Proof.
+
+The practical consequence is that vote-amount privacy has a finite
+horizon tied to quantum computing timelines. Ciphertexts are stored
+on-chain permanently; an adversary who records them today could decrypt
+individual share amounts once a cryptographically relevant quantum
+computer exists. Voter *identity* is unaffected — alternate nullifier
+unlinkability relies on Poseidon preimage resistance, not on El Gamal
+— but *how much* a voter allocated to each option would be exposed.
+
+This tradeoff is accepted for initial deployment. Per-round key rotation
+(each round uses a fresh $\mathsf{ea}\_\mathsf{sk}$) limits a classical
+compromise to a single round, and vote splitting across $N_s$ shares
+means a quantum adversary would recover individual shares rather than
+complete ballot allocations unless it also breaks the vote commitment
+unlinkability (which depends on the Poseidon-based blinded share
+commitments, not on El Gamal). Post-quantum migration is tracked as an
+open issue.
+
+
+# Open Issues
+
+- Per-validator Chaum–Pedersen DLEQ proofs for partial decryptions
+  would allow immediate identification of misbehaving validators at
+  tally time, converting the current liveness cost (subset search) to
+  $O(1)$ verification. See [Why No Per-Validator DLEQ Proofs].
+- Feldman VSS commitments from the dealer during the key ceremony
+  would let each validator verify that its Shamir share is consistent
+  with $\mathsf{ea}\_\mathsf{pk}$, removing the trust assumption on the
+  dealer. See [Why Threshold Secret Sharing].
+- Distributed key generation (DKG) would eliminate the trusted dealer
+  entirely, producing $\mathsf{ea}\_\mathsf{pk}$ without any single party
+  ever holding $\mathsf{ea}\_\mathsf{sk}$. See [Why Threshold Secret Sharing].
+- Post-quantum aggregatable encryption would eliminate the long-term
+  "harvest now, decrypt later" risk to vote-amount privacy. On-chain
+  El Gamal ciphertexts are permanent; a future quantum adversary could
+  decrypt individual share amounts for any recorded round. No production-
+  ready post-quantum scheme currently offers both additive homomorphism
+  and efficient threshold decryption. If such a scheme matures, the
+  El Gamal layer (encryption in the Vote Proof, ciphertext verification
+  in the Vote Reveal Proof, and the homomorphic tally procedure) could
+  be replaced without changing the commitment, nullifier, or Merkle
+  membership components of the protocol.
+  See [Why Classical El Gamal Rather Than Post-Quantum Encryption].
+- The exact production parametrization — threshold fraction, ACK
+  timeout duration, consecutive-miss jail limit, and their interaction
+  with expected validator set sizes — requires further evaluation
+  against operational data from vote chain testnets before values are
+  finalized.
 
 
 # Reference implementation
@@ -457,5 +577,9 @@ Halo 2 zero-knowledge proof circuits.
 [^protocol-pallasandvesta]: [Zcash Protocol Specification, Version 2025.6.3 [NU6.1]. Section 5.4.9.6: Pallas and Vesta](protocol/protocol.pdf#pallasandvesta)
 
 [^protocol-orchardkeycomponents]: [Zcash Protocol Specification, Version 2025.6.3 [NU6.1]. Section 4.2.3: Orchard Key Components](protocol/protocol.pdf#orchardkeycomponents)
+
+[^cometbft]: [CometBFT: Byzantine Fault Tolerant consensus engine](https://docs.cometbft.com/)
+
+[^cosmos-sdk]: [Cosmos SDK: Framework for building application-specific blockchains](https://docs.cosmos.network/)
 
 [^ref-impl]: [z-cale/zally: Zcash Shielded Voting reference implementation](https://github.com/z-cale/zally)
