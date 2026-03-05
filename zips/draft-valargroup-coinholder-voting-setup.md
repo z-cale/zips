@@ -419,6 +419,8 @@ mitigation is to spin up a new chain with the fix.
 - **Vote manager reassignment governance**: should reassignment of the
   vote manager require a supermajority vote from validators rather
   than any single bonded validator? See the Rationale entry above.
+- **Role consolidation**: evaluate whether the bootstrap operator and
+  vote manager roles should be merged into a single administrative role.
 
 
 # References
